@@ -14,6 +14,57 @@ from latency import compute_chain_latency, stats_table
 from loader import ChainLoaderThread
 from metadata import BagMetadata
 from plotting import PlotPane, PopoutWindow
+from ui_helpers import info_icon, set_header_tooltips
+
+
+# ---- Tooltip text shown by the ⓘ icons ----------------------------------
+TIP_TOLERANCE = (
+    "Used only when exact stamp matching fails.\n"
+    "Pairs each upstream message with the next downstream\n"
+    "one within ±X ms.\n\n"
+    "Smaller = stricter match, fewer false pairs.\n"
+    "Larger  = more matches, more risk of wrong pairs."
+)
+TIP_SLA = (
+    "Your acceptable maximum latency.\n\n"
+    "Plots draw a red dashed line at this value;\n"
+    "the stats table shows how many messages exceeded it."
+)
+TIP_KINDS = (
+    "Transport latency (always available)\n"
+    "  How long the message took travelling between stages\n"
+    "  of your pipeline (rosbag-recorded times). Robust.\n\n"
+    "End-to-End (E2E) latency (when the publisher stamps messages)\n"
+    "  Total age of the data: source delay + transport delay.\n"
+    "  Uses header.stamp as t = 0, so it reflects what an\n"
+    "  end user actually experiences.\n\n"
+    "Match method\n"
+    "  exact       — stamps match end-to-end → trustworthy\n"
+    "  approximate — paired by timing, ± a tolerance.\n"
+    "                Less reliable; check histogram width."
+)
+TIP_LOSS = (
+    "Per-topic counts and how many messages survive each hop.\n"
+    "A big drop at one hop tells you that node is restamping,\n"
+    "downsampling, or losing messages."
+)
+
+STAT_HEADER_TIPS = [
+    "Transport = rosbag-time.  E2E = header-stamp-based.",   # Kind
+    None,                                                    # Hop
+    "Plain-English formula for the number in this row.",     # definition
+    "Number of matched messages in this series.",            # n
+    "Smallest observed latency.",                            # min
+    "Average latency.",                                      # mean
+    "Median — half the messages were faster than this.",     # p50
+    "95% of messages were faster than this. Common SLA target.",  # p95
+    "99% of messages were faster than this. Tail latency.",  # p99
+    "Largest observed latency.",                             # max
+    "Spread around the mean.",                               # stddev
+    "Bounciness of consecutive latencies.\n"
+    "High jitter = unstable timing even if the mean is fine.",  # jitter
+    "Count and % of messages above the SLA threshold.",      # above SLA
+]
 
 
 class AnalysisTab(QtWidgets.QWidget):
@@ -61,7 +112,8 @@ class AnalysisTab(QtWidgets.QWidget):
         cb.addLayout(chain_btns)
 
         tol_row = QtWidgets.QHBoxLayout()
-        tol_row.addWidget(QtWidgets.QLabel("Approx. tolerance (ms):"))
+        tol_row.addWidget(QtWidgets.QLabel("Tolerance (ms):"))
+        tol_row.addWidget(info_icon(TIP_TOLERANCE))
         self.tolerance_spin = QtWidgets.QDoubleSpinBox()
         self.tolerance_spin.setDecimals(1)
         self.tolerance_spin.setRange(0.1, 5000.0)
@@ -69,7 +121,8 @@ class AnalysisTab(QtWidgets.QWidget):
         tol_row.addWidget(self.tolerance_spin)
 
         tol_row.addSpacing(20)
-        tol_row.addWidget(QtWidgets.QLabel("SLA threshold (ms):"))
+        tol_row.addWidget(QtWidgets.QLabel("SLA (ms):"))
+        tol_row.addWidget(info_icon(TIP_SLA))
         self.threshold_spin = QtWidgets.QDoubleSpinBox()
         self.threshold_spin.setDecimals(2)
         self.threshold_spin.setRange(0.0, 1_000_000.0)
@@ -96,22 +149,22 @@ class AnalysisTab(QtWidgets.QWidget):
         bottom = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         bottom.setHandleWidth(6); bottom.setChildrenCollapsible(False)
 
-        stats_box = QtWidgets.QGroupBox(
-            "Latency stats — Pipeline (rosbag-based) and True (header-based)")
+        stats_box = QtWidgets.QGroupBox("Latency stats")
         stats_box.setMinimumHeight(80)
         sb = QtWidgets.QVBoxLayout(stats_box)
-        self.method_label = QtWidgets.QLabel("")
-        sb.addWidget(self.method_label)
 
-        # Reasoning panel: explains what is being analysed and why.
-        self.reasoning_label = QtWidgets.QLabel("")
-        self.reasoning_label.setWordWrap(True)
-        self.reasoning_label.setStyleSheet(
-            "background:#f6f6f0; border:1px solid #ddd; "
-            "padding:6px; color:#333;")
-        self.reasoning_label.setTextInteractionFlags(
+        # Compact one-line status with a hover-for-details ⓘ.
+        status_row = QtWidgets.QHBoxLayout()
+        self.method_label = QtWidgets.QLabel("—")
+        self.method_label.setStyleSheet("color:#333;")
+        self.method_label.setTextInteractionFlags(
             QtCore.Qt.TextSelectableByMouse)
-        sb.addWidget(self.reasoning_label)
+        status_row.addWidget(self.method_label, stretch=1)
+        self.reasoning_icon = info_icon(
+            "Run Compute Latency to see results here.")
+        status_row.addWidget(self.reasoning_icon)
+        status_row.addWidget(info_icon(TIP_KINDS))
+        sb.addLayout(status_row)
 
         self.stats_table = QtWidgets.QTableWidget(0, 13)
         self.stats_table.setHorizontalHeaderLabels(
@@ -120,11 +173,15 @@ class AnalysisTab(QtWidgets.QWidget):
              "max", "stddev", "jitter", "above SLA"])
         self.stats_table.horizontalHeader().setStretchLastSection(True)
         self.stats_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        set_header_tooltips(self.stats_table, STAT_HEADER_TIPS)
         sb.addWidget(self.stats_table)
 
+        loss_row = QtWidgets.QHBoxLayout()
         self.loss_label = QtWidgets.QLabel("")
-        self.loss_label.setStyleSheet("font-family: monospace;")
-        sb.addWidget(self.loss_label)
+        self.loss_label.setStyleSheet("font-family: monospace; color:#444;")
+        loss_row.addWidget(self.loss_label, stretch=1)
+        loss_row.addWidget(info_icon(TIP_LOSS))
+        sb.addLayout(loss_row)
 
         export_row = QtWidgets.QHBoxLayout()
         self.export_btn = QtWidgets.QPushButton("Export CSV…")
@@ -281,39 +338,52 @@ class AnalysisTab(QtWidgets.QWidget):
                 "Try a larger tolerance or a different chain.")
             return
 
-        true_tag = ("<b style='color:#2ca02c;'>True latency available</b>"
-                    if result.has_true_latency
-                    else "<b style='color:#888;'>True latency: unavailable</b>")
+        # Crisp one-line status. The ⓘ next to it carries the long reasoning.
+        match_tag = (f"<b style='color:#1976d2;'>{method}</b>"
+                     if method == "exact"
+                     else f"<b style='color:#e67e22;'>{method} "
+                          f"±{self.tolerance_spin.value():g} ms</b>")
+        if result.has_e2e_latency:
+            e2e_tag = (f"<b style='color:#2ca02c;'>E2E latency "
+                       f"({100*result.source_stamp_coverage:.0f}%)</b>")
+        else:
+            e2e_tag = "<span style='color:#888;'>E2E latency: n/a</span>"
         self.method_label.setText(
-            f"Matched {len(merged):,} messages across {len(chain)} topics  |  "
-            f"Match: <b>{method}</b>"
-            + (f"  (tolerance ±{self.tolerance_spin.value()} ms)"
-               if method == "approximate" else "")
-            + f"  |  {true_tag}")
+            f"<b>{len(merged):,}</b> matched · match: {match_tag} · {e2e_tag}")
 
-        # Render the reasoning panel ("what is being analysed and why").
-        self.reasoning_label.setText(
-            "<br>".join("• " + line for line in result.reasoning_lines()))
+        # Long-form reasoning lives only on the ⓘ tooltip — no panel.
+        self.reasoning_icon.setToolTip(
+            "\n\n".join(result.reasoning_lines()))
 
         self._refresh_stats_table()
 
-        loss_lines = ["Per-topic counts and inter-hop loss:"]
-        prev_n = None
+        # One-line summary; full per-topic counts go to the ⓘ tooltip.
+        src_pct = 100 * len(merged) / max(1, counts[chain[0]])
+        deltas = []
+        for i in range(1, len(chain)):
+            prev_n = counts[chain[i - 1]] or 1
+            n = counts[chain[i]]
+            d_pct = 100 * (prev_n - n) / prev_n
+            deltas.append(f"{_lbl(i-1)}→{_lbl(i)}: {d_pct:+.1f}%")
+        self.loss_label.setText(
+            f"Survival: <b>{src_pct:.2f}%</b> of source &nbsp;·&nbsp; "
+            + " · ".join(deltas))
+        self.loss_label.setTextFormat(QtCore.Qt.RichText)
+        full = "Per-topic counts and inter-hop loss:\n"
+        prev = None
         for i, t in enumerate(chain):
             n = counts[t]
-            if prev_n is None:
-                loss_lines.append(f"  {_lbl(i)}  {t:<60}  {n:>10,}")
+            if prev is None:
+                full += f"  {_lbl(i)}  {t}  →  {n:,}\n"
             else:
-                lost = prev_n - n
-                pct = (lost / prev_n * 100) if prev_n > 0 else 0
-                loss_lines.append(
-                    f"  {_lbl(i)}  {t:<60}  {n:>10,}   "
-                    f"Δ={lost:+,}  ({pct:+.2f}%)")
-            prev_n = n
-        loss_lines.append(
-            f"  Matched in chain: {len(merged):,} "
-            f"({100*len(merged)/max(1,counts[chain[0]]):.2f}% of source)")
-        self.loss_label.setText("\n".join(loss_lines))
+                lost = prev - n
+                pct = (lost / prev * 100) if prev > 0 else 0
+                full += (f"  {_lbl(i)}  {t}  →  {n:,}   "
+                         f"Δ={lost:+,} ({pct:+.2f}%)\n")
+            prev = n
+        full += (f"\nMatched across the full chain: {len(merged):,} "
+                 f"({src_pct:.2f}% of source)")
+        self.loss_label.setToolTip(full)
 
         all_panes = self._all_panes()
         if not all_panes:
@@ -342,13 +412,13 @@ class AnalysisTab(QtWidgets.QWidget):
         keys = ["min_ms", "mean_ms", "p50_ms", "p95_ms", "p99_ms",
                 "max_ms", "stddev_ms", "jitter_ms"]
         # Light tint per kind for fast visual grouping.
-        bg_pipe = QtGui.QBrush(QtGui.QColor("#eaf3ff"))
-        bg_true = QtGui.QBrush(QtGui.QColor("#eafbe7"))
+        bg_xport = QtGui.QBrush(QtGui.QColor("#eaf3ff"))   # Transport
+        bg_e2e   = QtGui.QBrush(QtGui.QColor("#eafbe7"))   # End-to-End
         for row in rows:
             r = self.stats_table.rowCount()
             self.stats_table.insertRow(r)
-            kind = row.get("kind", "pipeline")
-            kind_tag = "Pipeline" if kind == "pipeline" else "True"
+            kind = row.get("kind", "transport")
+            kind_tag = "Transport" if kind == "transport" else "E2E"
             kind_item = QtWidgets.QTableWidgetItem(kind_tag)
             self.stats_table.setItem(r, 0, kind_item)
             self.stats_table.setItem(r, 1, QtWidgets.QTableWidgetItem(row["hop"]))
@@ -366,7 +436,7 @@ class AnalysisTab(QtWidgets.QWidget):
                 self.stats_table.setItem(r, 12, cell)
             else:
                 self.stats_table.setItem(r, 12, QtWidgets.QTableWidgetItem("—"))
-            bg = bg_pipe if kind == "pipeline" else bg_true
+            bg = bg_xport if kind == "transport" else bg_e2e
             for c in range(self.stats_table.columnCount()):
                 it = self.stats_table.item(r, c)
                 if it is not None:
@@ -380,14 +450,26 @@ class AnalysisTab(QtWidgets.QWidget):
         self._refresh_stats_table()
 
     # ------------------------------------------------------- pane mgmt ---
+    def _split_extent(self) -> int:
+        """Active extent of the panes splitter (height or width)."""
+        if self.panes_split.orientation() == QtCore.Qt.Horizontal:
+            return max(self.panes_split.width(), 200)
+        return max(self.panes_split.height(), 200)
+
+    def _equalize_panes(self):
+        n = self.panes_split.count()
+        if n <= 0:
+            return
+        share = self._split_extent() // n
+        self.panes_split.setSizes([share] * n)
+
     def _on_layout_changed(self, idx: int):
         ori = QtCore.Qt.Horizontal if idx == 1 else QtCore.Qt.Vertical
         self.panes_split.setOrientation(ori)
-        n = self.panes_split.count()
-        if n > 0:
-            ext = (self.panes_split.width() if ori == QtCore.Qt.Horizontal
-                   else self.panes_split.height())
-            self.panes_split.setSizes([max(ext, 200) // n] * n)
+        # Cancel maximize state on orientation flip — old sizes are stale.
+        self._maximized_pane = None
+        self._pre_max_sizes = None
+        self._equalize_panes()
 
     def _all_panes(self) -> List[PlotPane]:
         out = []
@@ -406,12 +488,21 @@ class AnalysisTab(QtWidgets.QWidget):
         pane.set_threshold(self._threshold())
         if self.merged is not None and not self.merged.empty:
             pane.set_data(self.merged, self.chain_topics())
+
+        # Preserve the user's existing drag layout. Only the very first pane
+        # gets equal-share sizing; subsequent adds keep prior sizes and give
+        # the new pane the average of the existing ones.
+        old_sizes = self.panes_split.sizes()
         self.panes_split.addWidget(pane)
         n = self.panes_split.count()
-        ori = self.panes_split.orientation()
-        ext = (self.panes_split.width() if ori == QtCore.Qt.Horizontal
-               else self.panes_split.height())
-        self.panes_split.setSizes([max(ext, 200) // n] * n)
+        if not old_sizes or sum(old_sizes) == 0:
+            self._equalize_panes()
+        else:
+            avg = max(50, sum(old_sizes) // len(old_sizes))
+            self.panes_split.setSizes(list(old_sizes) + [avg])
+        # Adding a pane invalidates a prior maximize.
+        self._maximized_pane = None
+        self._pre_max_sizes = None
 
     def _remove_pane(self, pane: PlotPane):
         if pane in self._popouts:
@@ -422,8 +513,10 @@ class AnalysisTab(QtWidgets.QWidget):
                 self, "Keep at least one", "At least one pane must remain.")
             return
         if pane is self._maximized_pane:
-            self._maximized_pane = None; self._pre_max_sizes = None
-        pane.setParent(None); pane.deleteLater()
+            self._maximized_pane = None
+            self._pre_max_sizes = None
+        pane.setParent(None)
+        pane.deleteLater()
 
     def _toggle_maximize_pane(self, pane: PlotPane):
         if pane in self._popouts:
@@ -431,35 +524,47 @@ class AnalysisTab(QtWidgets.QWidget):
             (win.showNormal if win.isMaximized() else win.showMaximized)()
             return
         n = self.panes_split.count()
+        # Restore: only valid if the splitter still holds the same number
+        # of children we recorded — otherwise the size list is stale.
         if self._maximized_pane is pane:
-            if self._pre_max_sizes:
-                self.panes_split.setSizes(self._pre_max_sizes)
-            self._maximized_pane = None; self._pre_max_sizes = None
+            if (self._pre_max_sizes is not None
+                    and len(self._pre_max_sizes) == n):
+                self.panes_split.setSizes(list(self._pre_max_sizes))
+            else:
+                self._equalize_panes()
+            self._maximized_pane = None
+            self._pre_max_sizes = None
             return
-        self._pre_max_sizes = self.panes_split.sizes()
+        # Maximize. Use the orientation-correct extent.
+        self._pre_max_sizes = list(self.panes_split.sizes())
+        ext = self._split_extent()
         sizes = [10] * n
         for i in range(n):
             if self.panes_split.widget(i) is pane:
-                sizes[i] = max(self.panes_split.height(), 600); break
+                sizes[i] = max(ext, 600)
+                break
         self.panes_split.setSizes(sizes)
         self._maximized_pane = pane
 
     def _popout_pane(self, pane: PlotPane):
         if pane in self._popouts:
-            self._popouts[pane].raise_(); self._popouts[pane].activateWindow()
+            self._popouts[pane].raise_()
+            self._popouts[pane].activateWindow()
             return
         if pane is self._maximized_pane:
             self._maximized_pane = None
-            if self._pre_max_sizes:
-                self.panes_split.setSizes(self._pre_max_sizes)
             self._pre_max_sizes = None
         title = pane.hop_combo.currentText() or "Plot"
         win = PopoutWindow(pane, title=f"Plot — {title}")
         win.closed.connect(self._on_popout_closed)
         self._popouts[pane] = win
         win.show()
+        # The splitter loses one child; rebalance the rest, or add a fresh
+        # pane if nothing remains.
         if self.panes_split.count() == 0:
             self.on_add_pane()
+        else:
+            self._equalize_panes()
 
     def _on_popout_closed(self, pane: PlotPane):
         if pane not in self._popouts:
@@ -467,6 +572,7 @@ class AnalysisTab(QtWidgets.QWidget):
         del self._popouts[pane]
         pane.setParent(None)
         self.panes_split.addWidget(pane)
+        self._equalize_panes()
 
     # ----------------------------------------------------------- export ---
     def on_export_csv(self):

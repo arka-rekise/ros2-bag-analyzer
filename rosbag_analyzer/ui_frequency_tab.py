@@ -13,6 +13,19 @@ from constants import PLOT_COLORS
 from frequency import topic_rate_stats, topic_rates
 from loader import ChainLoaderThread
 from plotting import TimeAxisItem
+from ui_helpers import info_icon
+
+_TIP_BIN = (
+    "How wide each time bucket is.\n\n"
+    "Smaller = more detail, more noise.\n"
+    "Larger  = smoother, fewer points.\n\n"
+    "Rule of thumb: bin ≈ 5 / nominal rate.\n"
+    "  100 Hz → 0.05 s,  10 Hz → 0.5 s."
+)
+_TIP_SMOOTH = (
+    "Rolling-mean width over the bins above.\n"
+    "1 = no smoothing. Use it to see trends instead of bursts."
+)
 
 
 class FrequencyTab(QtWidgets.QWidget):
@@ -53,7 +66,8 @@ class FrequencyTab(QtWidgets.QWidget):
         tb.addLayout(btns)
 
         ctrl = QtWidgets.QHBoxLayout()
-        ctrl.addWidget(QtWidgets.QLabel("Bin width (s):"))
+        ctrl.addWidget(QtWidgets.QLabel("Bin (s):"))
+        ctrl.addWidget(info_icon(_TIP_BIN))
         self.bin_spin = QtWidgets.QDoubleSpinBox()
         self.bin_spin.setDecimals(3); self.bin_spin.setRange(0.001, 600.0)
         self.bin_spin.setValue(1.0)
@@ -61,6 +75,7 @@ class FrequencyTab(QtWidgets.QWidget):
         ctrl.addWidget(self.bin_spin)
         ctrl.addSpacing(20)
         ctrl.addWidget(QtWidgets.QLabel("Smooth:"))
+        ctrl.addWidget(info_icon(_TIP_SMOOTH))
         self.smooth_spin = QtWidgets.QSpinBox()
         self.smooth_spin.setRange(1, 1000); self.smooth_spin.setValue(1)
         self.smooth_spin.setSuffix(" bins")

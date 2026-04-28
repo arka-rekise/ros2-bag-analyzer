@@ -9,57 +9,83 @@ A PyQt5 + PyQtGraph desktop tool that:
   approximate `merge_asof` with a configurable tolerance.
 * Computes **two distinct kinds of latency** for each matched message and
   reports both side-by-side:
-  - **Pipeline latency** (rosbag-based, always available):
+  - **Transport latency** (rosbag-based, always available):
     `t_bag(downstream) − t_bag(upstream)` — robust, measures only the
-    delay your nodes contribute.
-  - **True latency** (header-based, when `header.stamp` is valid on the
-    source): `t_bag(downstream) − header.stamp(source)`. Includes the
-    source delay (publisher → bag), so it reflects the *total observed
-    age* of the data at any downstream topic.
+    delay your nodes contribute. (Also called *pipeline* or *inter-stage*.)
+  - **End-to-End (E2E) latency** (header-based, when `header.stamp` is
+    valid on the source): `t_bag(downstream) − header.stamp(source)`.
+    Includes the source delay (publisher → bag), so it reflects the
+    *total observed age* of the data at any downstream topic.
 * Computes **per-topic publish frequency (Hz)** over time with adjustable
   bin width and smoothing.
-* Shows a **reasoning panel** after every Compute that explains, in plain
-  English, which match strategy was used, which kinds of latency are
-  available, and what each number means.
+* Every label, control, and table column has an **ⓘ hover icon** with a
+  plain-English explanation, so a non-engineer can read the headline
+  numbers and dig deeper only when they want context.
 * Renders interactive zoomable plots, multiple analysis tabs, pop-out plot
   windows, SLA threshold lines, histograms, CDFs, rolling means.
 * Caches per-topic timestamps to disk so re-running an analysis is instant.
 
 The maths behind these computations is documented in
-[`ALGORITHM.md`](ALGORITHM.md).
+[`rosbag_analyzer/ALGORITHM.md`](rosbag_analyzer/ALGORITHM.md).
+
+---
+
+## Quick glossary (for non-engineers)
+
+| Term | In one sentence |
+|---|---|
+| **Bag**            | A recording of a robot session. Contains every message every node published, with the time the recorder wrote it. |
+| **Topic**          | A named channel on the robot, e.g. `/camera/image_raw`. |
+| **Chain**          | An ordered list of topics that you believe a piece of data flows through, e.g. `camera → detector → tracker`. |
+| **Latency**        | How long a message took. We report two kinds (see below). |
+| **Transport latency** | "How long did the message take inside *your* pipeline?" Robust, always available. Uses bag-recorded times. (a.k.a. pipeline / inter-stage latency.) |
+| **End-to-End (E2E) latency** | "How old is the data when it reaches this point?" Includes the publisher's source delay. Available only when the publisher fills in `header.stamp`. |
+| **Source delay**   | Time between the publisher stamping the message and the bag recording it. |
+| **Match: exact**   | Stamps lined up perfectly — trust the numbers. |
+| **Match: approximate** | Paired by timing only, within a tolerance. Less reliable; use the histogram width to judge. |
+| **SLA**            | Your acceptable maximum latency. The tool flags any message above it. |
+| **p50 / p95 / p99**| 50%/95%/99% of messages were faster than this. p99 is your tail latency. |
+| **Jitter**         | How bouncy consecutive latencies are. High jitter = unstable timing. |
+| **Frequency (Hz)** | How many messages per second a topic publishes. |
+
+Whenever you see one of these in the GUI, hover the **ⓘ** icon next to it
+for a one- or two-line refresher.
 
 ---
 
 ## Repository layout
 
-All Python modules live directly in `~/ros_bag/rosbag_analyzer/` — flat,
-no nested packages.
+This repository (`~/ros_bag/`) holds the analyzer source plus the helper
+script that flattens zipped bags. All Python modules live directly in
+`rosbag_analyzer/` — flat, no nested packages.
 
 ```
-~/ros_bag/rosbag_analyzer/
-├── bag_latency_gui.py     # entrypoint — run this
-├── README.md              # this file
-├── ALGORITHM.md           # how header.stamp / latency / frequency work
-├── ui_main.py             # MainWindow + main()
-├── ui_analysis_tab.py     # Latency-analysis tab
-├── ui_frequency_tab.py    # Frequency-analysis tab
-├── plotting.py            # PlotPane, PopoutWindow, TimeAxisItem
-├── loader.py              # parallel ChainLoaderThread
-├── reader.py              # fast sqlite + CDR header reader
-├── latency.py             # chain join + per-hop stats
-├── frequency.py           # rate-binning helpers
-├── metadata.py            # BagMetadata
-├── cache.py               # disk cache helpers
-├── constants.py           # CDR consts, colours, cache dir
-└── ros_imports.py         # lazy ROS imports
+~/ros_bag/                    # repo root (the directory you `git init` in)
+├── README.md                 # this file
+├── unzip_bags.sh             # extracts every *.zip in cwd into a bag dir
+├── .gitignore                # whitelist: only README + rosbag_analyzer/ + .sh tracked
+└── rosbag_analyzer/          # the analyzer source
+    ├── bag_latency_gui.py    # entrypoint — run this
+    ├── ALGORITHM.md          # how header.stamp / latency / frequency work
+    ├── log_setup.py          # stderr logging
+    ├── ui_main.py            # MainWindow + main()
+    ├── ui_analysis_tab.py    # Latency-analysis tab
+    ├── ui_frequency_tab.py   # Frequency-analysis tab
+    ├── plotting.py           # PlotPane, PopoutWindow, TimeAxisItem
+    ├── loader.py             # parallel ChainLoaderThread
+    ├── reader.py             # fast sqlite + CDR header reader
+    ├── latency.py            # chain join + per-hop stats
+    ├── frequency.py          # rate-binning helpers
+    ├── metadata.py           # BagMetadata
+    ├── cache.py              # disk cache helpers
+    ├── constants.py          # CDR consts, colours, cache dir
+    ├── ros_imports.py        # lazy ROS imports
+    └── .gitignore            # ignore .venv, __pycache__, *.db3, *.pkl, ...
 ```
 
-The repository root (one level up) also contains:
-
-```
-unzip_bags.sh                   # extracts every *.zip in cwd into a bag dir
-20260419_050057/                # example extracted bag (created by unzip_bags.sh)
-```
+Bag data (e.g. `20260419_050057/`, `*.zip`, `*.db3`) is **not** tracked —
+the root `.gitignore` is a whitelist that only allows `README.md`,
+`unzip_bags.sh`, and the `rosbag_analyzer/` source folder.
 
 ---
 
@@ -137,33 +163,52 @@ source /opt/ros/humble/setup.bash
 
 ## 3. Extracting bags from `.zip` files
 
-If your bag is delivered as multiple zip files (one per split), use the
-script in the repository root:
+If your bag is delivered as multiple zip files (one per split), drop the
+zips into the repo root and run the helper script:
 
 ```bash
-cd ~/ros_bag                 # the directory containing the .zip files
-bash unzip_bags.sh
+cd ~/ros_bag           # repo root (contains README.md, unzip_bags.sh, rosbag_analyzer/)
+bash unzip_bags.sh     # or: ./unzip_bags.sh   (chmod +x first if needed)
+sudo apt install -y sqlite3 
+ros2 bag reindex <folder name> -s sqlite3
 ```
 
 What it does:
 
-1. Reads every `*.zip` in the directory the script lives in.
+1. Reads every `*.zip` in the directory the script lives in (= `~/ros_bag/`).
 2. Creates an output folder named `20260419_050057/` next to the script.
 3. Extracts every zip with `unzip -jo` (flatten paths, overwrite without
    prompting) so the resulting folder contains `metadata.yaml` plus all
    `*.db3` splits at the top level — exactly the layout this GUI expects.
+4. If `metadata.yaml` not present, use the following commands to gneerate it.
 
 Adjust `OUTPUT_DIR` in `unzip_bags.sh` if you want a different folder name.
+The extracted folder is automatically ignored by the root `.gitignore`,
+so it will not be committed.
 
 ---
 
 ## 4. Launching the GUI
 
-From `~/ros_bag/rosbag_analyzer/`:
+The Python modules import each other by bare name, so you must run from
+inside `rosbag_analyzer/`:
 
 ```bash
 cd ~/ros_bag/rosbag_analyzer
 python3 bag_latency_gui.py
+```
+
+Or, in a single line from the repo root:
+
+```bash
+( cd ~/ros_bag/rosbag_analyzer && python3 bag_latency_gui.py )
+```
+
+For verbose terminal output:
+
+```bash
+cd ~/ros_bag/rosbag_analyzer
+BAG_ANALYZER_LOG=DEBUG python3 bag_latency_gui.py
 ```
 
 The window opens with one empty *Latency 1* tab. Click **Open Bag Folder…**
@@ -182,42 +227,46 @@ The window opens with one empty *Latency 1* tab. Click **Open Bag Folder…**
    `source → ... → destination`** and click **Add selected ➜ active tab**
    (or double-click). The selected topics appear in the chain box.
 3. Reorder rows in the chain with ↑ / ↓; remove rows with **Remove**.
-4. Set:
-   * **Approx. tolerance (ms)** — used only if exact `header.stamp` matching
-     fails. 50 ms is fine for most pipelines; bump it up for bags where
-     intermediate nodes restamp messages.
-   * **SLA threshold (ms)** — optional. Draws a dashed red line on every plot
-     and reports `count, %` of messages above the line in the stats table.
-5. Click **Compute Latency ▶**. The loader reads only the selected topics, in
-   parallel, using as many threads as there are CPU cores available.
-6. Inspect:
-   * The **method line** — tells you whether matching was *exact* or
-     *approximate*, and whether True (header-based) latency is available.
-   * The **reasoning panel** — three or four bullets explaining what is
-     being analysed and why: the match strategy, what Pipeline latency
-     measures, what True latency adds on top of it (when the source
-     `header.stamp` is valid), and how to interpret the numbers below.
-   * The **stats table** with one row per series. The first column says
-     **Pipeline** (light-blue background) or **True** (light-green) so you
-     can tell at a glance which kind a row reports. Series shown:
-     - Pipeline: every hop `A→B`, `B→C`, …, plus the chain total.
-     - True (when available): *Source delay @ A* (`t_bag(A) − header.stamp(A)`),
-       *True @ Bᵢ* for each downstream topic, and *True end-to-end*.
-     Columns: `n, min, mean, p50, p95, p99, max, stddev, jitter, above SLA`.
-   * The **per-topic loss** line that shows how many messages survive each
-     hop.
-   * **Plot panes**. Each pane has its own:
-     - Plot type (Line, Line+markers, Scatter, Histogram, CDF, Rolling mean)
-     - X axis (Time / Message index)
-     - Hop selector with prefixes that make the kind explicit:
-       `[Pipe] A→B`, `[Pipe] Total`, `[Pipe] All hops overlay`,
-       `[True] Source delay @ A`, `[True] @ Bᵢ`, `[True] End-to-end`,
-       `[True] All true overlay`, and the killer one,
-       `[Pipe+True] Compare end-to-end` — overlays pipeline-total and
-       true-end-to-end on the same axes; the gap between the two curves at
-       any moment **is** the source delay at that moment.
-     - Y-log toggle
-     - Window-size spin (used for rolling mean / histogram bins)
+4. Set the two parameters (each has an **ⓘ** icon next to it for the
+   long-form explanation):
+   * **Tolerance (ms)** — only used if exact `header.stamp` matching fails.
+     50 ms is fine for most pipelines.
+   * **SLA (ms)** — optional. Plots get a red dashed line at this value and
+     the stats table reports how many messages exceeded it.
+5. Click **Compute Latency ▶**. The loader reads only the selected topics in
+   parallel.
+6. Read the results — the layout is intentionally crisp:
+   * **Status line** (one line, top of the stats area). Reads like:
+     ```
+     1,000 matched · match: exact · E2E latency (100%)   ⓘ ⓘ
+     ```
+     Match tag is colour-coded: blue = `exact`, orange = `approximate ±X ms`.
+     The two **ⓘ** icons hover-explain (a) what was just computed and why,
+     and (b) the durable definitions of **Transport** vs **End-to-End** latency.
+   * **Stats table** — one row per latency series.
+     - First column **Kind**: `Transport` (light-blue tint) or `E2E`
+       (light-green tint).
+     - Hover any column header (`p50`, `p95`, `p99`, `jitter`, `above SLA`,
+       …) for a one-sentence definition.
+     - Series shown: every transport hop, transport total, and — when
+       available — source delay, per-topic E2E latency, and E2E
+       end-to-end.
+   * **Survival line** — one line, e.g.
+     `Survival: 5.84% of source · A→B: -0.2% · B→C: -98.0%`.
+     The **ⓘ** next to it shows the full per-topic counts.
+   * **Plot panes** — each pane has these dropdowns, each with an **ⓘ**:
+     - **Plot:** Line, Line+markers, Scatter, Histogram, CDF, Rolling mean.
+     - **X:** Time / Message index.
+     - **Hop:** prefixed selections — `[Trans] A→B`, `[Trans] Total`,
+       `[Trans] All hops overlay`, `[E2E] Source delay @ A`,
+       `[E2E] @ Bᵢ`, `[E2E] End-to-end`, `[E2E] All E2E overlay`,
+       and the killer one, `[Trans+E2E] Compare end-to-end` — overlays
+       transport-total and E2E-end-to-end on the same axes; the gap
+       between the two curves at any moment **is** the source delay at
+       that moment.
+     - **Y log** toggle, **Window** spin (rolling mean / histogram bins).
+     - Y-axis units are dynamic: ns / µs / ms / s as you zoom; the cursor
+       readout follows the same scale.
    * **+ Add Plot Pane** stacks more panes; the **Plots: Vertical / Horizontal**
      combo flips the splitter orientation.
    * **⛶** maximizes a pane within the splitter; **⇱** pops it out into a
@@ -279,7 +328,7 @@ The right side is a tab widget. Run as many analyses in parallel as you like:
   `temp_store = MEMORY` PRAGMAs are set per connection so the OS happily
   fills RAM with bag pages.
 * The `header.stamp` value is extracted directly from the CDR-encoded bytes
-  (see [`ALGORITHM.md`](ALGORITHM.md)). For most topics this skips
+  (see [`rosbag_analyzer/ALGORITHM.md`](rosbag_analyzer/ALGORITHM.md)). For most topics this skips
   `deserialize_message` entirely — the fast path is roughly an order of
   magnitude faster than full deserialization.
 * Output arrays are pre-allocated from `metadata.yaml`'s message counts and
@@ -312,9 +361,10 @@ out of context.
   whose width ≈ tolerance, mean ≈ tolerance/2.
   **Trust pipeline latency only when** *Match: exact* **is shown, or when
   the latency histogram is tight relative to the tolerance.**
-* **Reasoning panel is descriptive, not a confidence score.** It tells you
-  *which* match method was used, not whether the resulting numbers are
-  trustworthy. No quality metric is attached to each reported value.
+* **The status-line / ⓘ explanations are descriptive, not a confidence
+  score.** They tell you *which* match method was used, not whether the
+  resulting numbers are trustworthy. No quality metric is attached to each
+  reported value.
 * **Header fast-path is decided once per topic.** If a publisher changes
   the message layout mid-bag (very rare — bag rotations across mismatched
   workspaces, ABI breaks), the byte-offset extractor would not re-validate
@@ -417,15 +467,15 @@ merged, method, counts, result = compute_chain_latency(
     dfs, ["/topic_a", "/topic_b", "/topic_c"], tolerance_ms=50.0)
 
 print("match:", method, "  rows:", len(merged),
-      "  true latency available:", result.has_true_latency)
+      "  E2E latency available:", result.has_e2e_latency)
 
 # Plain-English explanation of what was computed and why:
 for line in result.reasoning_lines():
     print(" -", line)
 
-# One stats dict per series — pipeline hops, pipeline total, source delay,
-# true-at-each-topic, and true end-to-end:
+# One stats dict per series — transport hops, transport total,
+# source delay, E2E-at-each-topic, and E2E end-to-end:
 for r in stats_table(merged, ["/topic_a", "/topic_b", "/topic_c"],
                      threshold_ms=20.0):
-    print(f"[{r['kind']:>8}] {r['hop']:<48}  mean={r['mean_ms']:.3f} ms")
+    print(f"[{r['kind']:>9}] {r['hop']:<48}  mean={r['mean_ms']:.3f} ms")
 ```

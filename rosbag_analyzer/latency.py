@@ -1,37 +1,39 @@
-"""Chain latency: pipeline (rosbag-based) + true (header-based).
+"""Chain latency: transport (rosbag-based) + end-to-end (header-based).
 
 We compute **two distinct kinds of latency** for the user-defined chain
 ``[T0, T1, ..., Tn]``:
 
-1. **Pipeline latency** — uses ``t_bag``, the wall-clock time the bag wrote
-   each row. Always available, robust against missing/restamped headers.
+1. **Transport latency** — uses ``t_bag``, the wall-clock time the bag
+   wrote each row. Always available, robust against missing/restamped
+   headers. (Sometimes called *pipeline* or *inter-stage* latency.)
 
-       lat_pipe_hop_i_to_(i+1)  =  t_bag(T_{i+1}) - t_bag(T_i)
-       lat_pipe_total           =  t_bag(T_n)    - t_bag(T_0)
-
-   Why this matters:
-       It tells you how long, in *bag time*, a message spent travelling from
-       one stage of your pipeline to the next. This is what your processing
-       stages contribute. It does NOT account for whatever delay happened
-       before the source topic was published (e.g. sensor capture delay,
-       USB transfer, kernel queueing).
-
-2. **True latency** — uses ``header.stamp`` of the source topic ``T0`` as
-   the t-zero. Only meaningful when ``T0`` carries a real header stamp,
-   typically set by the *publisher* near the moment of acquisition (e.g.
-   the camera driver writing the capture-clock value into the message).
-
-       lat_src_T0      =  t_bag(T0)   - header.stamp(T0)        # source delay
-       lat_true_at_Ti  =  t_bag(Ti)   - header.stamp(T0)        # cumulative
-       lat_true_total  =  t_bag(Tn)   - header.stamp(T0)        # end-to-end
+       lat_xport_hop_i_to_(i+1)  =  t_bag(T_{i+1}) - t_bag(T_i)
+       lat_xport_total           =  t_bag(T_n)    - t_bag(T_0)
 
    Why this matters:
-       Pipeline latency hides the "head start" the message already had
-       before it hit your topic chain. True latency includes *that* — the
-       source delay between when the publisher claims the data was sampled
-       (header.stamp) and when the bag recorded it (t_bag). Add the
-       pipeline latency on top and you get the total observed age of the
-       data at any downstream topic.
+       It tells you how long, in *bag time*, a message spent travelling
+       between stages of your pipeline. It is what your processing stages
+       contribute. It does NOT account for whatever delay happened before
+       the source topic was published (sensor capture delay, USB transfer,
+       kernel queueing, ...).
+
+2. **End-to-End (E2E) latency** — uses ``header.stamp`` of the source
+   topic ``T0`` as the t-zero. Only meaningful when ``T0`` carries a real
+   header stamp, typically set by the *publisher* near the moment of
+   acquisition (e.g. the camera driver writing the capture-clock value
+   into the message).
+
+       lat_src_T0     =  t_bag(T0)   - header.stamp(T0)         # source delay
+       lat_e2e_at_Ti  =  t_bag(Ti)   - header.stamp(T0)         # cumulative
+       lat_e2e_total  =  t_bag(Tn)   - header.stamp(T0)         # end-to-end
+
+   Why this matters:
+       Transport latency hides the "head start" the message already had
+       before it hit your topic chain. End-to-end latency includes *that*
+       — the source delay between when the publisher claims the data was
+       sampled (header.stamp) and when the bag recorded it (t_bag). Add
+       the transport latency on top and you get the total observed age
+       of the data at any downstream topic.
 
 Match strategy
 --------------
@@ -43,7 +45,7 @@ Match strategy
   user's tolerance. If a topic has no real header stamps, that topic's
   join key falls back to its own ``t_bag_ns``. In this fallback mode the
   *match* uses bag-time but we still preserve the source's
-  ``header_stamp_ns`` if it was real, so true latency may still be
+  ``header_stamp_ns`` if it was real, so end-to-end latency may still be
   available.
 """
 
@@ -76,10 +78,15 @@ class ChainResult:
     merged: pd.DataFrame
     method: str                       # "exact" | "approximate"
     counts: Dict[str, int]            # per-topic message counts
-    has_true_latency: bool            # header.stamp of source is usable
+    has_e2e_latency: bool             # header.stamp of source is usable
     source_stamp_coverage: float      # fraction of merged rows with valid hdr
     chain: List[str]
     tolerance_ms: float
+
+    # Backwards-compat alias for any code that still reads the old name.
+    @property
+    def has_true_latency(self) -> bool:        # pragma: no cover
+        return self.has_e2e_latency
 
     def reasoning_lines(self) -> List[str]:
         """One paragraph explaining the analysis to a human."""
@@ -98,28 +105,28 @@ class ChainResult:
                 "with the next downstream message within the tolerance.")
 
         out.append(
-            f"Pipeline latency (rosbag-based, always available): "
-            f"t_bag(downstream) − t_bag(upstream). Robust; measures only the "
-            f"time the message spent travelling between topics in your "
-            f"pipeline. Computed for every hop and the chain total.")
+            "Transport latency (rosbag-based, always available): "
+            "t_bag(downstream) − t_bag(upstream). Robust; measures only the "
+            "time the message spent travelling between stages of your "
+            "pipeline. Computed for every hop and the chain total.")
 
-        if self.has_true_latency:
+        if self.has_e2e_latency:
             cov = 100.0 * self.source_stamp_coverage
             out.append(
-                f"True latency (header-based, available for {cov:.1f}% of "
-                f"matched rows): t_bag(any topic) − header.stamp(source). "
-                f"Includes the source delay (publisher → bag) on top of the "
-                f"pipeline latency, giving the total observed age of the "
-                f"data at each downstream topic.")
+                f"End-to-end latency (header-based, available for {cov:.1f}% "
+                "of matched rows): t_bag(any topic) − header.stamp(source). "
+                "Includes the source delay (publisher → bag) on top of the "
+                "transport latency, giving the total observed age of the "
+                "data at each downstream topic.")
         else:
             out.append(
-                "True latency: NOT available — the source topic has no "
+                "End-to-end latency: NOT available — the source topic has no "
                 "valid header.stamp on the matched rows, so we can only "
-                "report pipeline (rosbag-based) latency.")
+                "report transport (rosbag-based) latency.")
 
         out.append(
             f"Matched rows: {n:,}. The plot panes and stats below let you "
-            f"slice both kinds independently.")
+            "slice both kinds independently.")
         return out
 
 
@@ -154,38 +161,38 @@ def _row_stats(s: pd.Series, threshold_ms: Optional[float]) -> Dict:
 
 def stats_table(merged: pd.DataFrame, chain: List[str],
                 threshold_ms: Optional[float] = None) -> List[Dict]:
-    """Return one stats dict per latency series (pipeline + true).
+    """Return one stats dict per latency series (transport + end-to-end).
 
-    Each row carries ``"kind"`` ∈ {``"pipeline"``, ``"true"``} so the GUI
+    Each row carries ``"kind"`` ∈ {``"transport"``, ``"e2e"``} so the GUI
     can group/colour them.
     """
     rows: List[Dict] = []
     if merged.empty:
         return rows
 
-    # ---- Pipeline (rosbag-based) ----
+    # ---- Transport (rosbag-based) ----
     for i in range(len(chain) - 1):
         a, b = _lbl(i), _lbl(i + 1)
         col = f"lat_{a}_{b}_ms"
         if col not in merged.columns:
             continue
-        row = {"kind": "pipeline",
+        row = {"kind": "transport",
                "hop": f"{a} → {b}",
                "from": chain[i], "to": chain[i + 1],
                "what": "t_bag(downstream) − t_bag(upstream)"}
         row.update(_row_stats(merged[col], threshold_ms))
         rows.append(row)
     if "lat_total_ms" in merged.columns:
-        row = {"kind": "pipeline",
-               "hop": f"Pipeline total ({_lbl(0)} → {_lbl(len(chain)-1)})",
+        row = {"kind": "transport",
+               "hop": f"Transport total ({_lbl(0)} → {_lbl(len(chain)-1)})",
                "from": chain[0], "to": chain[-1],
                "what": "t_bag(last) − t_bag(first)"}
         row.update(_row_stats(merged["lat_total_ms"], threshold_ms))
         rows.append(row)
 
-    # ---- True (header-based) ----
+    # ---- End-to-end (header-based) ----
     if "lat_src_ms" in merged.columns:
-        row = {"kind": "true",
+        row = {"kind": "e2e",
                "hop": f"Source delay @ {_lbl(0)}",
                "from": f"{chain[0]}.header.stamp", "to": f"{chain[0]}.t_bag",
                "what": "t_bag(source) − header.stamp(source)"}
@@ -196,10 +203,10 @@ def stats_table(merged: pd.DataFrame, chain: List[str],
         if col not in merged.columns:
             continue
         if i == len(chain) - 1:
-            label = f"True end-to-end ({chain[0]}.header → {chain[-1]})"
+            label = f"E2E end-to-end ({chain[0]}.header → {chain[-1]})"
         else:
-            label = f"True @ {_lbl(i)} ({chain[0]}.header → {chain[i]})"
-        row = {"kind": "true",
+            label = f"E2E @ {_lbl(i)} ({chain[0]}.header → {chain[i]})"
+        row = {"kind": "e2e",
                "hop": label,
                "from": f"{chain[0]}.header.stamp", "to": chain[i],
                "what": f"t_bag({chain[i]}) − header.stamp(source)"}
@@ -256,7 +263,7 @@ def compute_chain_latency(
     chain: List[str],
     tolerance_ms: float = 50.0,
 ) -> Tuple[pd.DataFrame, str, Dict[str, int], "ChainResult"]:
-    """Compute pipeline + true latency for ``chain``.
+    """Compute transport + end-to-end latency for ``chain``.
 
     Returns ``(merged, method, counts, result)`` — the first three for
     backward compatibility with earlier callers; ``result`` is a
@@ -299,11 +306,11 @@ def compute_chain_latency(
     if merged is None or len(merged) == 0:
         result = ChainResult(
             merged=pd.DataFrame(), method=method, counts=counts,
-            has_true_latency=False, source_stamp_coverage=0.0,
+            has_e2e_latency=False, source_stamp_coverage=0.0,
             chain=chain, tolerance_ms=tolerance_ms)
         return pd.DataFrame(), method, counts, result
 
-    # ---------------- Pipeline latency (rosbag-based) ----------------
+    # ---------------- Transport latency (rosbag-based) ----------------
     for i in range(len(chain) - 1):
         a, b = _lbl(i), _lbl(i + 1)
         merged[f"lat_{a}_{b}_ms"] = (
@@ -314,21 +321,21 @@ def compute_chain_latency(
             merged[f"t_{_lbl(len(chain)-1)}_ns"] - merged[f"t_{_lbl(0)}_ns"]
         ) / 1e6
 
-    # ---------------- True latency (header-based) --------------------
-    has_true = False
+    # ---------------- End-to-end latency (header-based) --------------
+    has_e2e = False
     coverage = 0.0
     if "header_stamp_ns" in merged.columns:
         hs = merged["header_stamp_ns"]
         valid = hs > 0
         coverage = float(valid.mean()) if len(merged) else 0.0
         if valid.any():
-            has_true = True
+            has_e2e = True
             hs_arr = hs.to_numpy()
             valid_arr = valid.to_numpy()
             for i in range(len(chain)):
                 lbl = _lbl(i)
                 t_ns = merged[f"t_{lbl}_ns"].to_numpy()
-                col = f"lat_true_{lbl}_ms"
+                col = f"lat_true_{lbl}_ms"   # keep column name for compat
                 merged[col] = np.where(
                     valid_arr, (t_ns - hs_arr) / 1e6, np.nan)
             # convenience aliases
@@ -343,9 +350,9 @@ def compute_chain_latency(
 
     result = ChainResult(
         merged=merged, method=method, counts=counts,
-        has_true_latency=has_true, source_stamp_coverage=coverage,
+        has_e2e_latency=has_e2e, source_stamp_coverage=coverage,
         chain=chain, tolerance_ms=tolerance_ms)
-    logger.info("compute_chain_latency: method=%s rows=%d has_true=%s "
+    logger.info("compute_chain_latency: method=%s rows=%d has_e2e=%s "
                 "coverage=%.1f%%",
-                method, len(merged), has_true, 100 * coverage)
+                method, len(merged), has_e2e, 100 * coverage)
     return merged, method, counts, result

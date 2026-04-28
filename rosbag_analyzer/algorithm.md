@@ -25,7 +25,7 @@ The three things we compute are:
 Time is always stored as `int64` nanoseconds internally to avoid the precision
 loss `float64` would introduce around 2025 epoch values.
 
----
+--- 
 
 ## 1. Extracting `header.stamp` from the raw bytes
 
@@ -123,8 +123,8 @@ table. Each kind answers a different question:
 
 | Kind | Formula | Question it answers | Always available? |
 |---|---|---|---|
-| **Pipeline** (rosbag-based) | `t_bag(downstream) − t_bag(upstream)` | "How long did the message spend travelling between two topics inside my pipeline?" | Yes |
-| **True / source-to-system** (header-based) | `t_bag(downstream) − header.stamp(source)` | "How old is the data at this downstream topic, counting from the moment the publisher claims it was acquired?" | Only when the source's `header.stamp` is real (sensor drivers, rosbag2 publishers, anything that fills it in) |
+| **Transport** (rosbag-based) — *a.k.a. pipeline / inter-stage* | `t_bag(downstream) − t_bag(upstream)` | "How long did the message spend travelling between two topics inside my pipeline?" | Yes |
+| **End-to-End (E2E) / source-to-system** (header-based) | `t_bag(downstream) − header.stamp(source)` | "How old is the data at this downstream topic, counting from the moment the publisher claims it was acquired?" | Only when the source's `header.stamp` is real (sensor drivers, rosbag2 publishers, anything that fills it in) |
 
 ### 2.0 Why two kinds?
 
@@ -140,27 +140,27 @@ the driver). Using `header.stamp(source)` as `t = 0` gives you the
 delay + USB delay + kernel + driver + your pipeline. That is what an
 end-user actually feels.
 
-Showing both in the same UI lets you decompose the end-to-end delay:
+Showing both in the same UI lets you decompose the E2E delay:
 
 ```
-true_end_to_end   =   source_delay   +   pipeline_total
+E2E_end_to_end    =   source_delay   +   transport_total
    t_bag(C)             t_bag(A)             t_bag(C)
    - hdr(A)             - hdr(A)             - t_bag(A)
 ```
 
-### 2.1 Pipeline latency formulas
+### 2.1 Transport latency formulas
 
 For a chain `[T0, T1, ..., Tn]`:
 
 ```
-lat_pipe_hop_i_to_(i+1) = t_bag(T_{i+1}) − t_bag(T_i)        (ns)
-lat_pipe_total          = t_bag(T_n)     − t_bag(T_0)
+lat_xport_hop_i_to_(i+1) = t_bag(T_{i+1}) − t_bag(T_i)        (ns)
+lat_xport_total          = t_bag(T_n)     − t_bag(T_0)
 ```
 
 These are reported in milliseconds. They appear as columns
 `lat_<A>_<B>_ms` and `lat_total_ms` in the merged DataFrame.
 
-### 2.2 True / header-based latency formulas
+### 2.2 End-to-End / header-based latency formulas
 
 When the source's `header.stamp` is valid on a row (`header_stamp_ns > 0`):
 
@@ -256,7 +256,7 @@ df["join_key"] = df["header_stamp_ns"] if has_stamps else df["t_bag_ns"]
 The 50% threshold is deliberately tolerant: a few sentinel zero stamps in an
 otherwise-stamped topic still let us use stamps for matching.
 
-### 2.4 Computing pipeline latency
+### 2.4 Computing transport latency
 
 Once `merged` is a single dataframe with `t_T0_ns, ..., t_Tn_ns`:
 
@@ -269,10 +269,12 @@ merged["lat_total_ms"] = (merged[f"t_{labels[-1]}_ns"]
                           - merged[f"t_{labels[0]}_ns"]) / 1e6
 ```
 
-### 2.5 Computing true latency
+### 2.5 Computing End-to-End latency
 
 When the source row carries a real `header.stamp`, we add three families of
-columns (rows where the source stamp is invalid get `NaN`, ignored by stats):
+columns (rows where the source stamp is invalid get `NaN`, ignored by stats).
+The internal column prefix `lat_true_*` is kept for backwards compatibility
+with any saved CSV exports — the user-visible label is "E2E":
 
 ```python
 hs    = merged["header_stamp_ns"]                # source stamp
@@ -289,14 +291,14 @@ merged["lat_true_total_ms"] = np.where(valid,
 
 Note that `lat_src_ms` is exactly `lat_true_A_ms` — both equal
 `t_bag(A) − header.stamp(A)`. We expose it under both names so the GUI can
-label it intuitively ("source delay" vs. "true latency at A").
+label it intuitively ("source delay" vs. "E2E latency at A").
 
 The `ChainResult` returned by `compute_chain_latency` carries:
 
-* `has_true_latency` — `True` when at least one matched row has a valid
-  source stamp.
+* `has_e2e_latency` — `True` when at least one matched row has a valid
+  source stamp. (Old name `has_true_latency` is kept as a read-only alias.)
 * `source_stamp_coverage` — the fraction of matched rows where the source
-  stamp is valid (the GUI shows this in the reasoning panel).
+  stamp is valid (rendered as `E2E latency (NN%)` on the GUI status line).
 
 ### 2.6 Convenience columns
 
@@ -308,24 +310,39 @@ We also attach:
 
 ### 2.7 What the GUI shows you and why
 
-After **Compute Latency**, the analyzer reports:
+After **Compute Latency**, the analyzer surfaces the result in a
+deliberately compact layout. Every label/header has an **ⓘ** hover icon
+that carries the long-form explanation, so the visible text stays short.
 
-* **Match line** — `exact` or `approximate` and the tolerance used. This
-  tells you *how* messages were paired up.
-* **Reasoning panel** — three or four bullets explaining, in plain English,
-  which kinds of latency are available, what they measure, and what to use
-  them for. This is generated by `ChainResult.reasoning_lines()`.
-* **Stats table** — every series gets one row, tagged either **Pipeline**
-  (light blue background) or **True** (light green). Columns: `kind, hop,
-  definition, n, min, mean, p50, p95, p99, max, stddev, jitter, above SLA`.
-* **Loss accounting** — per-topic counts and `Δ` per hop. Tells you whether
-  a node is dropping messages.
-* **Plot panes** — every pane lets you choose any single series or any
-  overlay. Selections are tagged `[Pipe]`, `[True]`, or `[Pipe+True]` so you
-  always know which kind you're looking at. The `[Pipe+True] Compare
-  end-to-end` selection overlays `lat_total_ms` and `lat_true_total_ms`
-  on the same axes — the gap between them at any moment is the source
-  delay at that moment.
+* **Status line** (one line):
+  ```
+  1,000 matched · match: exact · E2E latency (100%)   ⓘ ⓘ
+  ```
+  - First **ⓘ** — the per-run reasoning produced by
+    `ChainResult.reasoning_lines()` (which match strategy was used and
+    why; whether E2E latency is available; what each one measures).
+  - Second **ⓘ** — the durable definitions of **Transport** vs
+    **End-to-End** latency and exact vs approximate matching.
+  - Match tag colour-codes itself: blue when `exact`, orange when
+    `approximate ±X ms`. Anything orange should be cross-checked against
+    the histogram width before being trusted.
+* **Stats table** — one row per series. `Kind` column tints the row
+  (Transport = light blue, E2E = light green). Columns: `Kind, Hop,
+  definition, n, min, mean, p50, p95, p99, max, stddev, jitter,
+  above SLA`. Each column header has its own one-sentence tooltip
+  (e.g. `p99` → "99% of messages were faster than this. Tail latency.").
+* **Survival line** (one line):
+  ```
+  Survival: 5.84% of source · A→B: -0.2% · B→C: -98.0%   ⓘ
+  ```
+  Tells you at a glance which hop is dropping messages. The **ⓘ** opens
+  the full per-topic-count breakdown.
+* **Plot panes** — every pane has prefixed `[Trans]`, `[E2E]`, and
+  `[Trans+E2E]` selections in the Hop combo, plus an **ⓘ** that
+  enumerates them. The `[Trans+E2E] Compare end-to-end` selection
+  overlays `lat_total_ms` and `lat_true_total_ms` on the same axes — the
+  gap between the two curves at any moment is the source delay at that
+  moment. Y-axis units adapt as you zoom (ns / µs / ms / s).
 
 ### 2.8 Loss accounting
 
@@ -341,8 +358,8 @@ source topic.
 
 ### 2.9 Per-series summary statistics
 
-For each latency series — pipeline hop, pipeline total, source delay,
-true-at-Ti, and true end-to-end — we report:
+For each latency series — transport hop, transport total, source delay,
+E2E-at-Ti, and E2E end-to-end — we report:
 
 | stat | formula |
 |---|---|
@@ -352,7 +369,7 @@ true-at-Ti, and true end-to-end — we report:
 | `jitter` | RMS of the consecutive-sample first differences: `sqrt(mean((Δarr)²))`. Large `jitter` with small `stddev` means smooth bursts; small `jitter` with large `stddev` means slow drifts. |
 | `above SLA n / %` | count and % of samples strictly greater than the user's SLA threshold (only when threshold > 0). |
 
-Every row is tagged `kind = pipeline | true` so the GUI can colour-group
+Every row is tagged `kind = transport | e2e` so the GUI can colour-group
 them and so you can `groupby('kind')` in CSV exports.
 
 All of this lives in `latency.py:_row_stats`.

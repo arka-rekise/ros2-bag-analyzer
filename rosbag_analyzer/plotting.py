@@ -11,6 +11,36 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from constants import PLOT_COLORS, hop_label as _lbl
+from ui_helpers import info_icon
+
+
+# Plain-English tooltips for the plot pane controls.
+_TIP_PLOT_TYPE = (
+    "Line / Line+markers / Scatter\n"
+    "    Latency over time or message index.\n\n"
+    "Histogram\n"
+    "    Distribution of latency values.\n"
+    "    Tall narrow shape = consistent. Wide = unstable.\n\n"
+    "CDF\n"
+    "    Cumulative percentage. Read it as:\n"
+    "    'X % of messages were ≤ Y ms.' Best for SLA targets.\n\n"
+    "Rolling mean\n"
+    "    Smoothed line — shows trends, hides outliers."
+)
+_TIP_HOP = (
+    "[Trans] X→Y\n"
+    "    Transport latency between two of your topics\n"
+    "    (rosbag-recorded times).\n\n"
+    "[Trans] Total\n"
+    "    Same, but for the whole chain.\n\n"
+    "[E2E] Source delay\n"
+    "    Publisher's stamp → bag-record at the source.\n\n"
+    "[E2E] @ X / End-to-end\n"
+    "    Total age of the data at this topic — includes\n"
+    "    the source delay.\n\n"
+    "[Trans+E2E] Compare end-to-end\n"
+    "    Overlays the two; the gap is the source delay."
+)
 
 
 def _fmt_lat(v_s: float) -> str:
@@ -87,6 +117,7 @@ class PlotPane(QtWidgets.QFrame):
         top.setContentsMargins(4, 4, 4, 0)
 
         top.addWidget(QtWidgets.QLabel("Plot:"))
+        top.addWidget(info_icon(_TIP_PLOT_TYPE))
         self.type_combo = QtWidgets.QComboBox()
         self.type_combo.addItems(self.PLOT_TYPES)
         self.type_combo.currentIndexChanged.connect(self._refresh_plot)
@@ -101,6 +132,7 @@ class PlotPane(QtWidgets.QFrame):
 
         top.addSpacing(10)
         top.addWidget(QtWidgets.QLabel("Hop:"))
+        top.addWidget(info_icon(_TIP_HOP))
         self.hop_combo = QtWidgets.QComboBox()
         self.hop_combo.currentIndexChanged.connect(self._refresh_plot)
         top.addWidget(self.hop_combo, stretch=1)
@@ -160,8 +192,8 @@ class PlotPane(QtWidgets.QFrame):
         v.setContentsMargins(2, 2, 2, 2)
         v.addLayout(top)
         v.addWidget(self.plot_widget)
-        self.setMinimumHeight(140)
-        self.setMinimumWidth(280)
+        self.setMinimumHeight(120)
+        self.setMinimumWidth(220)
 
     # ---- public ----
     def set_threshold(self, ms: Optional[float]) -> None:
@@ -176,26 +208,26 @@ class PlotPane(QtWidgets.QFrame):
         items: List[Tuple[str, List[Tuple[str, str]]]] = []
         n_hops = len(chain) - 1
 
-        # ---- Pipeline (rosbag-based) ----
+        # ---- Transport (rosbag-based) ----
         for i in range(n_hops):
             a, b = _lbl(i), _lbl(i + 1)
-            items.append((f"[Pipe] {a}→{b}: {chain[i]}  →  {chain[i+1]}",
+            items.append((f"[Trans] {a}→{b}: {chain[i]}  →  {chain[i+1]}",
                           [(f"lat_{a}_{b}_ms", f"{a}→{b}")]))
         if n_hops >= 1:
             items.append(
-                (f"[Pipe] Total: {chain[0]}  →  {chain[-1]}",
-                 [("lat_total_ms", "pipe total")]))
+                (f"[Trans] Total: {chain[0]}  →  {chain[-1]}",
+                 [("lat_total_ms", "transport total")]))
             items.append(
-                ("[Pipe] All hops (overlay)",
+                ("[Trans] All hops (overlay)",
                  [(f"lat_{_lbl(i)}_{_lbl(i+1)}_ms",
                    f"{_lbl(i)}→{_lbl(i+1)}") for i in range(n_hops)]
-                 + [("lat_total_ms", "pipe total")]))
+                 + [("lat_total_ms", "transport total")]))
 
-        # ---- True (header-based), only if available ----
-        has_true = "lat_src_ms" in merged.columns
-        if has_true:
+        # ---- End-to-end (header-based), only if available ----
+        has_e2e = "lat_src_ms" in merged.columns
+        if has_e2e:
             items.append(
-                (f"[True] Source delay @ {_lbl(0)} "
+                (f"[E2E] Source delay @ {_lbl(0)} "
                  f"(header.stamp → t_bag of {chain[0]})",
                  [("lat_src_ms", "src delay")]))
             for i in range(1, len(chain)):
@@ -203,24 +235,24 @@ class PlotPane(QtWidgets.QFrame):
                 if col not in merged.columns:
                     continue
                 if i == n_hops:
-                    label = (f"[True] End-to-end: "
+                    label = (f"[E2E] End-to-end: "
                              f"{chain[0]}.header → {chain[-1]}")
-                    leg = "true e2e"
+                    leg = "E2E"
                 else:
-                    label = (f"[True] @ {_lbl(i)}: "
+                    label = (f"[E2E] @ {_lbl(i)}: "
                              f"{chain[0]}.header → {chain[i]}")
-                    leg = f"true @ {_lbl(i)}"
+                    leg = f"E2E @ {_lbl(i)}"
                 items.append((label, [(col, leg)]))
-            true_overlay = [("lat_src_ms", "src delay")] + [
-                (f"lat_true_{_lbl(i)}_ms", f"true @ {_lbl(i)}")
+            e2e_overlay = [("lat_src_ms", "src delay")] + [
+                (f"lat_true_{_lbl(i)}_ms", f"E2E @ {_lbl(i)}")
                 for i in range(1, len(chain))
                 if f"lat_true_{_lbl(i)}_ms" in merged.columns]
-            items.append(("[True] All true (overlay)", true_overlay))
+            items.append(("[E2E] All E2E (overlay)", e2e_overlay))
             if n_hops >= 1:
                 items.append(
-                    ("[Pipe+True] Compare end-to-end",
-                     [("lat_total_ms", "pipe total"),
-                      ("lat_true_total_ms", "true e2e")]))
+                    ("[Trans+E2E] Compare end-to-end",
+                     [("lat_total_ms", "transport total"),
+                      ("lat_true_total_ms", "E2E")]))
 
         self._items = items
         self.hop_combo.blockSignals(True)

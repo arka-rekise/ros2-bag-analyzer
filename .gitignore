@@ -10,5 +10,6 @@
 
 # 2. Re-allow the things we DO want under version control.
 !/.gitignore
+!/README.md
 !/rosbag_analyzer/
 !/unzip_bags.sh
