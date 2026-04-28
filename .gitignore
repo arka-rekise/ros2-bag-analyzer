@@ -1,0 +1,14 @@
+# Repo-root .gitignore for ~/ros_bag/
+#
+# Whitelist policy: ignore EVERYTHING at the top level by default, then
+# explicitly allow only the source folder and the unzip helper script.
+# Bag data (extracted folders like 20260419_050057/, *.zip, *.db3, ...)
+# is therefore never accidentally committed.
+
+# 1. Ignore everything in this directory.
+/*
+
+# 2. Re-allow the things we DO want under version control.
+!/.gitignore
+!/rosbag_analyzer/
+!/unzip_bags.sh

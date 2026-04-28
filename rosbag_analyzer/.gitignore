@@ -1,0 +1,95 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+sdist/
+wheels/
+pip-wheel-metadata/
+.installed.cfg
+MANIFEST
+
+# --- Virtual environments -------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+pyvenv.cfg
+
+# --- Tooling caches -------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.tox/
+.nox/
+.cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+nosetests.xml
+*.cover
+*.py,cover
+
+# --- Notebooks ------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Editors / IDEs -------------------------------------------------------
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*.swn
+*~
+.netrwhist
+.spyderproject
+.spyproject
+.ropeproject
+
+# --- OS metadata ----------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Tool-specific dotfiles -----------------------------------------------
+.claude/
+.aider*
+.cursor/
+.continue/
+.github_copilot/
+
+# --- ROS / bag artefacts that should never end up in the source repo ------
+*.db3
+*.db3-shm
+*.db3-wal
+*.bag
+*.bag.active
+*.zip
+metadata.yaml
+
+# --- Local runtime output -------------------------------------------------
+*.log
+*.csv
+chain_latency*.csv
+chain*.json
+bag_info.txt
+
+# --- This project's own pickle cache (mirrors ~/.cache/bag_latency_gui) ---
+bag_latency_gui_cache/
+*.pkl
+*.parquet
